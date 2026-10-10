@@ -9,29 +9,43 @@ import {
 } from "react-native";
 import axios from "axios";
 
+const API = "http://127.0.0.1:8000/api";
+
 export default function HomeScreen() {
     const [parkingSpaces, setParkingSpaces] = useState<any[]>([]);
+    const [reservations, setReservations] = useState<any[]>([]);
     const [selectedSpace, setSelectedSpace] = useState<any>(null);
     const [reservationMessage, setReservationMessage] = useState("");
     const [cancelMessage, setCancelMessage] = useState("");
 
-    // Endpoint #1 - Get all parking spaces
+    // Endpoint #1 + #4 - Get all parking spaces and all reservations
+    const loadData = async () => {
+        try {
+            const [spacesRes, reservationsRes] = await Promise.all([
+                axios.get(`${API}/parking-spaces`),
+                axios.get(`${API}/reservations`),
+            ]);
+
+            setParkingSpaces(spacesRes.data);
+            setReservations(reservationsRes.data);
+
+            // keep the selected slot in sync with the fresh status
+            setSelectedSpace((prev: any) =>
+                prev ? spacesRes.data.find((s: any) => s.id === prev.id) ?? null : null
+            );
+        } catch (error: any) {
+            console.log("API ERROR:", error.message);
+        }
+    };
+
     useEffect(() => {
-        axios
-            .get("http://127.0.0.1:8000/api/parking-spaces")
-            .then((response) => {
-                console.log("PARKING SPACES:", response.data);
-                setParkingSpaces(response.data);
-            })
-            .catch((error) => {
-                console.log("API ERROR:", error.message);
-            });
+        loadData();
     }, []);
 
     // Endpoint #2 - Get one parking space
     useEffect(() => {
         axios
-            .get("http://127.0.0.1:8000/api/parking-spaces/1")
+            .get(`${API}/parking-spaces/1`)
             .then((response) => {
                 console.log("SINGLE PARKING SPACE:", response.data);
             })
@@ -41,60 +55,61 @@ export default function HomeScreen() {
     }, []);
 
     // Endpoint #3 - Create reservation
-    const reserveParking = () => {
-        axios
-            .post("http://127.0.0.1:8000/api/reservations", {
+    const reserveParking = async () => {
+        try {
+            const response = await axios.post(`${API}/reservations`, {
                 parking_space_id: selectedSpace?.id,
                 name: "Charles",
                 date: "2026-10-06",
                 time: "10:00",
-            })
-            .then((response) => {
-                console.log("RESERVATION CREATED:", response.data);
-                setReservationMessage("Reservation created successfully!");
-                setCancelMessage("");
-            })
-            .catch((error) => {
-                console.log("API ERROR:", error.message);
             });
+            console.log("RESERVATION CREATED:", response.data);
+            setReservationMessage("Reservation created successfully!");
+            setCancelMessage("");
+            await loadData(); // refresh status
+        } catch (error: any) {
+            console.log("API ERROR:", error.message);
+            setReservationMessage(
+                error.response?.data?.message ?? "Failed to reserve slot."
+            );
+            setCancelMessage("");
+        }
     };
 
-    // Endpoint #4 - Get all reservations
-    useEffect(() => {
-        axios
-            .get("http://127.0.0.1:8000/api/reservations")
-            .then((response) => {
-                console.log("RESERVATIONS:", response.data);
-            })
-            .catch((error) => {
-                console.log("API ERROR:", error.message);
-            });
-    }, []);
+    // Endpoint #5 - Cancel reservation of the selected slot
+    const cancelReservation = async () => {
+        const reservation = reservations.find(
+            (r) => r.parking_space_id === selectedSpace?.id
+        );
 
-    // Endpoint #5 - Cancel reservation
-    const cancelReservation = () => {
-        axios
-            .delete("http://127.0.0.1:8000/api/reservations/1")
-            .then((response) => {
-                console.log("RESERVATION CANCELLED:", response.data);
-                setCancelMessage("Reservation cancelled successfully!");
-                setReservationMessage("");
-            })
-            .catch((error) => {
-                console.log("API ERROR:", error.message);
-                setCancelMessage("Failed to cancel reservation.");
-            });
+        if (!reservation) {
+            setCancelMessage("No reservation found for this slot.");
+            setReservationMessage("");
+            return;
+        }
+
+        try {
+            const response = await axios.delete(`${API}/reservations/${reservation.id}`);
+            console.log("RESERVATION CANCELLED:", response.data);
+            setCancelMessage("Reservation cancelled successfully!");
+            setReservationMessage("");
+            await loadData(); // refresh status
+        } catch (error: any) {
+            console.log("API ERROR:", error.message);
+            setCancelMessage("Failed to cancel reservation.");
+        }
     };
+
+    const isReserved = selectedSpace?.status === "reserved";
 
     return (
         <View style={styles.container}>
             <Text style={styles.title}>Parking Reservation</Text>
 
-            {/* Endpoint #3 Button */}
             <Button
                 title="Reserve Slot"
                 onPress={reserveParking}
-                disabled={!selectedSpace}
+                disabled={!selectedSpace || isReserved}
             />
 
             <Text>{reservationMessage}</Text>
@@ -105,21 +120,30 @@ export default function HomeScreen() {
                 data={parkingSpaces}
                 keyExtractor={(item) => item.id.toString()}
                 renderItem={({ item }) => (
-                  <TouchableOpacity
-                  style={[
-                 styles.card,
-                selectedSpace?.id === item.id && styles.cardSelected,
-                ]}
-                 onPress={() => setSelectedSpace(item)}
->
+                    <TouchableOpacity
+                        style={[
+                            styles.card,
+                            selectedSpace?.id === item.id && styles.cardSelected,
+                        ]}
+                        onPress={() => setSelectedSpace(item)}
+                    >
                         <Text style={styles.name}>{item.name}</Text>
 
-                        {selectedSpace && (
-                            <Text>Selected: {selectedSpace.name}</Text>
+                        {selectedSpace?.id === item.id && (
+                            <Text>Selected: {item.name}</Text>
                         )}
 
                         <Text>Location: {item.location}</Text>
-                        <Text>Status: {item.status}</Text>
+                        <Text
+                            style={[
+                                styles.status,
+                                item.status === "available"
+                                    ? styles.available
+                                    : styles.unavailable,
+                            ]}
+                        >
+                            {item.status}
+                        </Text>
                     </TouchableOpacity>
                 )}
             />
@@ -128,29 +152,17 @@ export default function HomeScreen() {
             <Button
                 title="Cancel Reservation"
                 onPress={cancelReservation}
+                disabled={!selectedSpace || !isReserved}
             />
         </View>
     );
 }
 
+// styles: gamit gihapon ang imong existing StyleSheet (walay usab)
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        padding: 20,
-        paddingTop: 60,
-        backgroundColor: "#f5f6fa",
-    },
-    title: {
-        fontSize: 28,
-        fontWeight: "bold",
-        marginBottom: 15,
-        color: "#2d3436",
-    },
-    subtitle: {
-        fontSize: 18,
-        fontWeight: "600",
-        marginVertical: 15,
-    },
+    container: { flex: 1, padding: 20, paddingTop: 60, backgroundColor: "#f5f6fa" },
+    title: { fontSize: 28, fontWeight: "bold", marginBottom: 15, color: "#2d3436" },
+    subtitle: { fontSize: 18, fontWeight: "600", marginVertical: 15 },
     card: {
         padding: 18,
         marginBottom: 12,
@@ -163,16 +175,8 @@ const styles = StyleSheet.create({
         shadowRadius: 4,
         elevation: 2,
     },
-    cardSelected: {
-        borderColor: "#0984e3",
-        borderWidth: 2,
-        backgroundColor: "#e8f4fd",
-    },
-    name: {
-        fontSize: 20,
-        fontWeight: "bold",
-        marginBottom: 5,
-    },
+    cardSelected: { borderColor: "#0984e3", borderWidth: 2, backgroundColor: "#e8f4fd" },
+    name: { fontSize: 20, fontWeight: "bold", marginBottom: 5 },
     status: {
         alignSelf: "flex-start",
         paddingHorizontal: 10,
@@ -185,21 +189,4 @@ const styles = StyleSheet.create({
     },
     available: { backgroundColor: "#00b894" },
     unavailable: { backgroundColor: "#d63031" },
-    reserveBtn: {
-        backgroundColor: "#0984e3",
-        padding: 14,
-        borderRadius: 10,
-        alignItems: "center",
-    },
-    cancelBtn: {
-        backgroundColor: "#d63031",
-        padding: 14,
-        borderRadius: 10,
-        alignItems: "center",
-        marginTop: 10,
-    },
-    btnDisabled: { backgroundColor: "#b2bec3" },
-    btnText: { color: "#fff", fontWeight: "bold", fontSize: 16 },
-    successText: { color: "#00b894", marginTop: 8, fontWeight: "600" },
-    cancelText: { color: "#d63031", marginTop: 8, fontWeight: "600" },
 });
